@@ -45,7 +45,7 @@ RUN mkdir -p /workspace/DiffUTE/data && \
     unzip /workspace/DiffUTE/data/archive.zip -d /workspace/DiffUTE/data && \
     rm /workspace/DiffUTE/data/archive.zip
 
-# Sao chép thư mục ASCFormer vào workspace
+# Sao chép thư mục DiffUTE vào workspace
 ADD . /workspace/DiffUTE
 
 # Cài đặt các thư viện từ requirements.txt
