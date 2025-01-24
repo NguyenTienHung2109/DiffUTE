@@ -66,7 +66,7 @@ logger = get_logger(__name__, log_level="INFO")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = None
-resolution = 16
+resolution = 512
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     
