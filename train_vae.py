@@ -1,16 +1,17 @@
 import io
-from pcache_fileio import fileio
-from pcache_fileio.oss_conf import OssConfigFactory
+# from pcache_fileio import fileio
+# from pcache_fileio.oss_conf import OssConfigFactory
 import pandas as pd
 import numpy as np
 import os, cv2
-OSS_CONF_NAME = "oss_conf_1" # Optional, name of your oss configure
-OSS_ID = "xxx"# Your oss id
-OSS_KEY = "xxx"# Your oss key
-OSS_ENDPOINT = "oss-cn-hangzhou-zmf.aliyuncs.com"# Your oss endpoint
-OSS_BUCKET = "xxx"# Your oss bucket name
-OSS_PCACHE_ROOT_DIR = "oss://" + OSS_BUCKET
-OssConfigFactory.register(OSS_ID, OSS_KEY, OSS_ENDPOINT, OSS_CONF_NAME)
+import wandb
+# OSS_CONF_NAME = "oss_conf_1" # Optional, name of your oss configure
+# OSS_ID = "xxx"# Your oss id
+# OSS_KEY = "xxx"# Your oss key
+# OSS_ENDPOINT = "oss-cn-hangzhou-zmf.aliyuncs.com"# Your oss endpoint
+# OSS_BUCKET = "xxx"# Your oss bucket nameA
+# OSS_PCACHE_ROOT_DIR = "oss://" + OSS_BUCKET
+# OssConfigFactory.register(OSS_ID, OSS_KEY, OSS_ENDPOINT, OSS_CONF_NAME)
 
 import argparse
 import logging
@@ -44,11 +45,11 @@ from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate
 from diffusers.utils.import_utils import is_xformers_available
-from alps.pytorch.api.utils.web_access import patch_requests
 import cv2
 import albumentations as alb
 from albumentations.pytorch import ToTensorV2
-patch_requests()   
+# from alps.pytorch.api.utils.web_access import patch_requests
+# patch_requests()
 
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -64,7 +65,7 @@ def parse_args():
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
-        required=True,
+        required=False,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
@@ -158,7 +159,7 @@ def parse_args():
         help="whether to randomly flip images horizontally",
     )
     parser.add_argument(
-        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
@@ -227,7 +228,7 @@ def parse_args():
     parser.add_argument(
         "--dataloader_num_workers",
         type=int,
-        default=32,
+        default=0,
         help=(
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
@@ -313,13 +314,13 @@ def parse_args():
         args.local_rank = env_local_rank
 
     # Sanity checks
-    if args.dataset_name is None and args.train_data_dir is None:
-        raise ValueError("Need either a dataset name or a training folder.")
-
+    # if args.dataset_name is None and args.train_data_dir is None:
+    #     raise ValueError("Need either a dataset name or a training folder.")
+    
     # default to using the same revision for the non-ema model if not specified
     if args.non_ema_revision is None:
         args.non_ema_revision = args.revision
-
+    
     return args
 
 #generate mask for ocr region
@@ -349,13 +350,13 @@ def prepare_mask_and_masked_image(image, mask):
 
     return mask, masked_image
 
-def download_oss_file_pcache(my_file = "xxx"):
-    MY_FILE_PATH = os.path.join(OSS_PCACHE_ROOT_DIR, my_file)
-    with fileio.file_io_impl.open(MY_FILE_PATH, "rb") as fd:
-        content = fd.read()
-    img = np.frombuffer(content, dtype=np.int8)
-    img = cv2.imdecode(img, flags=1)
-    return img
+# def download_oss_file_pcache(my_file = "xxx"):
+#     MY_FILE_PATH = os.path.join(OSS_PCACHE_ROOT_DIR, my_file)
+#     with fileio.file_io_impl.open(MY_FILE_PATH, "rb") as fd:
+#         content = fd.read()
+#     img = np.frombuffer(content, dtype=np.int8)
+#     img = cv2.imdecode(img, flags=1)
+#     return img
 
 image_trans_resize_and_crop = alb.Compose(
             [   alb.RandomCrop(height=512, width=512, p=1),
@@ -365,6 +366,12 @@ image_trans_resize_and_crop = alb.Compose(
 
 image_trans = alb.Compose(
             [   ToTensorV2(),])
+
+def collate_fn_ours(examples):
+    pixel_values = torch.stack([example["instance_images"] for example in examples])
+    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+    batch = {"pixel_values": pixel_values}
+    return batch
 
 class OursDataset(Dataset):
     """
@@ -393,15 +400,27 @@ class OursDataset(Dataset):
         return self._length
 
     def _load_images_paths(self):
+        # print('loading training file...')
+        # df = pd.read_csv('data.csv',low_memory=False)
+        # path = 'data/'+ df['path']
+        # self.instance_paths = path.tolist()[:]
+        
         print('loading training file...')
-        df = pd.read_csv('data.csv',low_memory=False)
-        path = 'data/'+ df['path']
-        self.instance_paths = path.tolist()[:]
+        df = pd.read_csv('data/output.csv',low_memory=False)
+        img_path = 'data/' + df['image_path']
+        self.instance_paths = img_path.tolist()[:]
 
     def __getitem__(self, index):
         example = {}
-        instance_image = download_oss_file_pcache(self.instance_paths[index % self.num_instance_images])
-
+        # instance_image = download_oss_file_pcache(self.instance_paths[index % self.num_instance_images])
+        print("self.instance_paths[index % self.num_instance_images]: ", self.instance_paths[index % self.num_instance_images])
+        # read if image is gif instead of jpg
+        if self.instance_paths[index % self.num_instance_images].endswith('.gif'):
+            gif = cv2.VideoCapture(self.instance_paths[index % self.num_instance_images])
+            ret, instance_image = gif.read()
+            gif.release()
+        else:
+            instance_image = cv2.imread(self.instance_paths[index % self.num_instance_images])
         h, w, c = instance_image.shape
         short_side = min(h, w)
         if short_side < 512:
@@ -426,8 +445,6 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
         return f"{username}/{model_id}"
     else:
         return f"{organization}/{model_id}"
-
-
 
 def tensor2im(input_image, imtype=np.uint8):
     """"Converts a Tensor array into a numpy image array.
@@ -460,14 +477,15 @@ def main():
             ),
         )
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
+    wandb.init(project="train_diffute", config=vars(args))
 
-    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
+    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit, logging_dir=logging_dir)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        logging_dir=logging_dir,
+        log_with="wandb",
+        # logging_dir=logging_dir,
         project_config=accelerator_project_config,
     )
 
@@ -513,15 +531,14 @@ def main():
 
     # Load scheduler, tokenizer and models.
 
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+    vae = AutoencoderKL.from_pretrained('stabilityai/stable-diffusion-2-inpainting', subfolder="vae", revision=args.revision
        )
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        'stabilityai/stable-diffusion-2-inpainting', subfolder="unet", revision=args.non_ema_revision
     )
-
-
+    
     unet.requires_grad_(False)
-
+    
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
             import xformers
@@ -534,46 +551,45 @@ def main():
             unet.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
-
+    
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
             for i, model in enumerate(models):
                 model.save_pretrained(os.path.join(output_dir, "vae"))
-
+                
                 # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
-
+        
         def load_model_hook(models, input_dir):
-
             for i in range(len(models)):
                 # pop models so that they are not loaded again
                 model = models.pop()
-
+                
                 # load diffusers style into model
                 load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
                 model.register_to_config(**load_model.config)
-
+                
                 model.load_state_dict(load_model.state_dict())
                 del load_model
-
+        
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
-
+    
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-
+    
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
-
+    
     if args.scale_lr:
         args.learning_rate = (
             args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
-
+    
     # Initialize the optimizer
     if args.use_8bit_adam:
         try:
@@ -586,7 +602,7 @@ def main():
         optimizer_cls = bnb.optim.AdamW8bit
     else:
         optimizer_cls = torch.optim.AdamW
-
+    
     optimizer = optimizer_cls(
         vae.parameters(),
         lr=args.learning_rate,
@@ -594,20 +610,14 @@ def main():
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
     )
-
-    def collate_fn_ours(examples):
-        pixel_values = torch.stack([example["instance_images"] for example in examples])
-        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-        batch = {"pixel_values": pixel_values}
-        return batch
-
+    
     datasets_doc = OursDataset(
         size=512,
         center_crop=False,
         transform_resize_crop = image_trans_resize_and_crop,
         transform = image_trans
         )
-
+    
     train_dataloader = torch.utils.data.DataLoader(
         datasets_doc,
         shuffle=True,
@@ -616,32 +626,32 @@ def main():
         num_workers=args.dataloader_num_workers,
         drop_last=True
     )
-
+    
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-
+    
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=optimizer,
         num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
-
+    
     # Prepare everything with our `accelerator`.
     vae, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         vae, optimizer, train_dataloader, lr_scheduler
     )
-
+    
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
-
+    
     # Move text_encode and vae to gpu and cast to weight_dtype
     vae.to(accelerator.device, dtype=weight_dtype)
     # unet.to(accelerator.device, dtype=weight_dtype)
@@ -651,16 +661,15 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
-
+    
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         accelerator.init_trackers("text2image-fine-tune", config=vars(args))
-
+    
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-
-
+    
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(datasets_doc)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
@@ -670,7 +679,7 @@ def main():
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     global_step = 0
     first_epoch = 0
-
+    
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
@@ -681,7 +690,7 @@ def main():
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
-
+        
         if path is None:
             accelerator.print(
                 f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
@@ -695,14 +704,14 @@ def main():
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
-
+    
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-
+    
     guidance_scale = args.guidance_scale
     for epoch in range(first_epoch, args.num_train_epochs):
-        print("Epoch: "+str(epoch))
+        print("\nEpoch: "+str(epoch))
         vae.train()
         train_loss = 0.0
         count = 0
@@ -712,21 +721,21 @@ def main():
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
-
+            
             with accelerator.accumulate(vae):
                 # Convert images to latent space
                 from skimage import data, io
-
+                
                 input_img = batch["pixel_values"].to(weight_dtype)
                 dec_img = vae(batch["pixel_values"].to(weight_dtype))
                 dec_img = dec_img["sample"]
-
+                
                 loss = F.mse_loss(dec_img.float(), input_img.float(), reduction="mean")
-
+                
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
-
+                
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -754,8 +763,8 @@ def main():
 
             if global_step >= args.max_train_steps:
                 break
-
-
+    
+    
     accelerator.end_training()
 
 

@@ -1,7 +1,8 @@
 import io
-from pcache_fileio import fileio
-from pcache_fileio.oss_conf import OssConfigFactory
+# from pcache_fileio import fileio
+# from pcache_fileio.oss_conf import OssConfigFactory
 import pandas as pd
+import wandb
 import numpy as np
 import os, cv2
 import pandas as pd
@@ -9,13 +10,13 @@ import json
 from pandas import Series,DataFrame
 from PIL import Image, ImageDraw, ImageFont, ImageFile
 
-OSS_CONF_NAME = "oss_conf_1" # Optional, name of your oss configure
-OSS_ID = "xxx"# Your oss id
-OSS_KEY = "xxx"# Your oss key
-OSS_ENDPOINT = "cn-heyuan-alipay-office.oss-alipay.aliyuncs.com"# Your oss endpoint
-OSS_BUCKET = "xxx"# Your oss bucket name
-OSS_PCACHE_ROOT_DIR = "oss://" + OSS_BUCKET
-OssConfigFactory.register(OSS_ID, OSS_KEY, OSS_ENDPOINT, OSS_CONF_NAME)
+# OSS_CONF_NAME = "oss_conf_1" # Optional, name of your oss configure
+# OSS_ID = "xxx"# Your oss id
+# OSS_KEY = "xxx"# Your oss key
+# OSS_ENDPOINT = "cn-heyuan-alipay-office.oss-alipay.aliyuncs.com"# Your oss endpoint
+# OSS_BUCKET = "xxx"# Your oss bucket name
+# OSS_PCACHE_ROOT_DIR = "oss://" + OSS_BUCKET
+# OssConfigFactory.register(OSS_ID, OSS_KEY, OSS_ENDPOINT, OSS_CONF_NAME)
 
 import argparse
 import logging
@@ -57,22 +58,23 @@ import torch.multiprocessing
 import cv2
 torch.multiprocessing.set_sharing_strategy('file_system')
 
-from alps.pytorch.api.utils.web_access import patch_requests
-patch_requests()
+# from alps.pytorch.api.utils.web_access import patch_requests
+# patch_requests()
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.15.0.dev0")
 logger = get_logger(__name__, log_level="INFO")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = None
-
+resolution = 16
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
-        required=True,
+        required=False,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
@@ -136,7 +138,7 @@ def parse_args():
     parser.add_argument(
         "--resolution",
         type=int,
-        default=512,
+        default=resolution,
         help=(
             "The resolution for input images, all the images in the train/validation dataset will be resized to this"
             " resolution"
@@ -159,7 +161,7 @@ def parse_args():
         help="whether to randomly flip images horizontally",
     )
     parser.add_argument(
-        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
@@ -317,13 +319,14 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    print("argssssssssssssssssssssss", args)
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
     # Sanity checks
-    if args.dataset_name is None and args.train_data_dir is None:
-        raise ValueError("Need either a dataset name or a training folder.")
+    # if args.dataset_name is None and args.train_data_dir is None:
+    #     raise ValueError("Need either a dataset name or a training folder.")
 
     # default to using the same revision for the non-ema model if not specified
     if args.non_ema_revision is None:
@@ -332,16 +335,15 @@ def parse_args():
     return args
 
 
-
 image_trans_resize_and_crop = alb.Compose(
             [   
-                alb.Resize(512,512),
+                alb.Resize(resolution,resolution),
                 alb.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
                 ])
 
 mask_resize_and_crop = alb.Compose(
             [   
-                alb.Resize(512,512),
+                alb.Resize(resolution,resolution),
                 ])
 
 image_trans = alb.Compose(
@@ -387,13 +389,13 @@ def prepare_mask_and_masked_image(image, mask):
 
     return masked_image
 
-def download_oss_file_pcache(my_file = "xxx"):
-    MY_FILE_PATH = os.path.join(OSS_PCACHE_ROOT_DIR, my_file)
-    with fileio.file_io_impl.open(MY_FILE_PATH, "rb") as fd:
-        content = fd.read()
-    img = np.frombuffer(content, dtype=np.int8)
-    img = cv2.imdecode(img, flags=1)
-    return img
+# def download_oss_file_pcache(my_file = "xxx"):
+#     MY_FILE_PATH = os.path.join(OSS_PCACHE_ROOT_DIR, my_file)
+#     with fileio.file_io_impl.open(MY_FILE_PATH, "rb") as fd:
+#         content = fd.read()
+#     img = np.frombuffer(content, dtype=np.int8)
+#     img = cv2.imdecode(img, flags=1)
+#     return img
 
 
 class OursDataset(Dataset):
@@ -423,24 +425,28 @@ class OursDataset(Dataset):
 
     def _load_images_paths(self):
         print('loading training file...')
-        df = pd.read_csv('doc_select.csv',low_memory=False)
-        img_path = df['image_path']
-        ocr_path = df['ocr_path']
+        df = pd.read_csv('data/output.csv',low_memory=False)
+        img_path = 'data/' + df['image_path']
+        ocr_path = 'data/' + df['ocr_path']
         self.instance_images_paths = img_path.tolist()[:]
         self.ocr_paths = ocr_path.tolist()[:]
-
-        df5 = pd.read_csv('doc.csv',low_memory=False)
-        path5 = 'diffdoc/'+df5['path']
-        self.path5 = path5.tolist()[:]
+        
+        # df5 = pd.read_csv('doc.csv',low_memory=False)
+        # path5 = 'diffdoc/'+df5['path']
+        # self.path5 = path5.tolist()[:]
 
     def __getitem__(self, index):
         example = {}
-        instance_image = download_oss_file_pcache(self.instance_images_paths[i])
+        print(self.instance_images_paths[index])
+        instance_image = cv2.imread(self.instance_images_paths[index])
         instance_image_size = instance_image.shape
 
         #判断instance image是否存在
-        with fileio.file_io_impl.open('xxx' + temp_ocr_path, 'r') as f:
+        # with fileio.file_io_impl.open('xxx' + temp_ocr_path, 'r') as f:
+        #     content = f.read()
+        with open(self.ocr_paths[index], "r") as f:
             content = f.read()
+        
         ocr_res = json.loads(content)
         ocr_pd = pd.DataFrame(ocr_res['document'])
         ocr_pd = ocr_pd[ocr_pd['score']>0.8]
@@ -449,7 +455,7 @@ class OursDataset(Dataset):
         ocr_pd_sample = ocr_pd.sample()
         instance_image_size = instance_image.shape
         text = ocr_pd_sample['text'].tolist()[0]
-        location = ocr_pd_sample['box'].tolist()[0]
+        location = ocr_pd_sample['bbox'].tolist()[0]
         location = list([min([x[0] for x in location]), min([x[1] for x in location]), max([x[0] for x in location]), max([x[1] for x in location])])
         location = process_location(location, instance_image_size)
         location = np.int32(location)
@@ -515,6 +521,12 @@ class OursDataset(Dataset):
         example['mask'] = mask_crop
         example['masked_image'] = masked_image_crop
         example['ttf_img'] = draw_ttf
+        
+        print("instance_images", example['instance_images'].shape)
+        print("mask", example['mask'].shape)
+        print("masked_image", example['masked_image'].shape)
+        print("ttf_img", example['ttf_img'].shape)
+        
 
         return example
 
@@ -576,13 +588,15 @@ def main():
         )
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
-    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
+    wandb.init(project="train_diffute", config=vars(args))
+        
+    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit, logging_dir=logging_dir)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        logging_dir=logging_dir,
+        log_with="wandb",
+        # logging_dir=logging_dir,
         project_config=accelerator_project_config,
     )
 
@@ -623,15 +637,50 @@ def main():
                     gitignore.write("epoch_*\n")
         elif args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
+    
+    def collate_fn_ours(examples):
+        pixel_values = torch.stack([example["instance_images"] for example in examples])
+        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
+        masks = []
+        masked_images = []
+        ttf_imgs = []
+        for example in examples:
+            masks.append(example["mask"])
+            masked_images.append(example["masked_image"])
+            ttf_imgs.append(example["ttf_img"])
+
+        masks = torch.stack(masks)
+        masked_images = torch.stack(masked_images)
+
+        batch = {"pixel_values": pixel_values, "masks": masks, "masked_images": masked_images, "ttf_images":ttf_imgs}
+        return batch
+    
+    # DataLoaders creation:
+    
+    datasets_doc = OursDataset(
+        size=resolution,
+        transform_resize_crop = image_trans_resize_and_crop,
+        transform_to_tensor = image_trans,
+        mask_transform = mask_resize_and_crop
+        )
+    
+    train_dataloader = torch.utils.data.DataLoader(
+        datasets_doc,
+        shuffle=True,
+        collate_fn=collate_fn_ours,
+        batch_size=args.train_batch_size,
+        num_workers=args.dataloader_num_workers,
+    )
+    
     # Load scheduler and models.
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler.from_pretrained('stabilityai/stable-diffusion-2-inpainting', subfolder="scheduler")
 
     processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-printed')
     trocr_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-printed').encoder
-    vae = AutoencoderKL.from_pretrained('./diffdoc-vae-512/checkpoint-350000/', subfolder="vae", revision=args.revision)
+    vae = AutoencoderKL.from_pretrained('stabilityai/stable-diffusion-2-inpainting', subfolder="vae", revision=args.revision)
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        'stabilityai/stable-diffusion-2-inpainting', subfolder="unet", revision=args.non_ema_revision
     )
 
     # Freeze vae and text_encoder
@@ -725,43 +774,7 @@ def main():
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
     )
-
-    def collate_fn_ours(examples):
-        pixel_values = torch.stack([example["instance_images"] for example in examples])
-        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-
-        masks = []
-        masked_images = []
-        ttf_imgs = []
-        for example in examples:
-            masks.append(example["mask"])
-            masked_images.append(example["masked_image"])
-            ttf_imgs.append(example["ttf_img"])
-
-        masks = torch.stack(masks)
-        masked_images = torch.stack(masked_images)
-
-        batch = {"pixel_values": pixel_values, "masks": masks, "masked_images": masked_images, "ttf_images":ttf_imgs}
-
-        return batch
-
-    # DataLoaders creation:
-
-    datasets_doc = OursDataset(
-        size=512,
-        transform_resize_crop = image_trans_resize_and_crop,
-        transform_to_tensor = image_trans,
-        mask_transform = mask_resize_and_crop
-        )
-
-    train_dataloader = torch.utils.data.DataLoader(
-        datasets_doc,
-        shuffle=True,
-        collate_fn=collate_fn_ours,
-        batch_size=args.train_batch_size,
-        num_workers=args.dataloader_num_workers,
-    )
-
+    
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -947,9 +960,19 @@ def main():
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
 
+            wandb.log({
+                "epoch": epoch,
+                "global_step": global_step,
+                "train_loss": train_loss,
+                "lr": lr_scheduler.get_last_lr()[0],
+            })
+
             if global_step >= args.max_train_steps:
                 break
 
+    if accelerator.is_main_process:
+        wandb.finish()
+        
     accelerator.end_training()
 
 

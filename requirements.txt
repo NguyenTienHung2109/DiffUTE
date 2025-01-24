@@ -5,4 +5,8 @@ datasets
 ftfy
 tensorboard
 Jinja2
-pcache_fileio
+diffusers
+wandb
+albumentations
+paddleocr
+paddlepaddle
